@@ -1,16 +1,53 @@
-FROM debian:wheezy
+FROM node:latest
 
-MAINTAINER pokorny [dot] jan [dot] 94 [at] gmail [dot] com
+MAINTAINER Jan Pokorny
 
-# Install basics 
-RUN apt-get update &&  \
-    apt-get install -y git wget curl
+##
+## Install Java
+##
+RUN DEBIAN_FRONTEND=noninteractive apt-get update -q && \
+	apt-get install -qy --no-install-recommends sudo default-jdk
 
-# Install NodeJS
-RUN curl -sL https://deb.nodesource.com/setup_5.x | bash - \
-	&& apt-get install -y nodejs
+##
+## Install Android SDK
+##
+# Set correct environment variables.
+ENV ANDROID_SDK_FILE android-sdk_r24.0.1-linux.tgz
+ENV ANDROID_SDK_URL http://dl.google.com/android/$ANDROID_SDK_FILE
 
-# Install packages
+# Install 32bit support for Android SDK
+RUN dpkg --add-architecture i386 && \
+    apt-get update -q && \
+    apt-get install -qy --no-install-recommends libstdc++6:i386 libgcc1:i386 zlib1g:i386 libncurses5:i386
+
+# Install kvm support for Android emulator
+#RUN apt-get install -qy --no-install-recommends qemu-kvm libvirt-bin libegl1-mesa
+
+# Install Android SDK
+ENV ANDROID_HOME /usr/local/android-sdk-linux
+RUN cd /usr/local && \
+    wget $ANDROID_SDK_URL && \
+    tar -xzf $ANDROID_SDK_FILE && \
+    export PATH=$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools && \
+    chgrp -R users $ANDROID_HOME && \
+    chmod -R 0775 $ANDROID_HOME && \
+    rm $ANDROID_SDK_FILE
+
+# Install android tools and system-image.
+
+ENV PATH $PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/23.0.1
+
+RUN apt-get install expect -y --force-yes
+COPY tools /opt/tools
+RUN ["/opt/tools/android-accept-licenses.sh", "android update sdk --all --no-ui --filter platform-tools,android-23,build-tools-23.0.1,extra-android-support,extra-android-m2repository,sys-img-x86_64-android-23,extra-google-m2repository"]
+
+#Download better node
+RUN npm install -g n
+RUN n stable
+
+##
+## Install Ionic stuff
+##
 RUN npm install -g \
 		gulp \
 		bower \
@@ -18,52 +55,32 @@ RUN npm install -g \
 		ionic@beta \
 		cordova 
 
-COPY tools /opt/tools
+# Clean up when done.
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    npm cache clear
 
-# Expose port: web (8100), livereload (35729)
+# Default react-native web server port
 EXPOSE 8100 35729
 
+ENV USERNAME dev
 
-#ANDROID
-#JAVA
+RUN adduser --disabled-password --gecos '' $USERNAME && \
+    echo $USERNAME:$USERNAME | chpasswd && \
+    echo "%sudo ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
+    adduser $USERNAME sudo
+    #adduser $USERNAME kvm && \
+    #adduser $USERNAME libvirt
 
-# ENV DEBIAN_FRONTEND noninteractive
-RUN dpkg-reconfigure debconf -f Noninteractive
+# Create android avd image
+# RUN echo "no" | android create avd -n android-23-phone -c 1000M -s WVGA854 -t 1
 
-# install python-software-properties (so you can do add-apt-repository)
-RUN apt-get update && apt-get install -y -q python-software-properties software-properties-common
+# Tell gradle to store dependencies in a sub directory of the android project
+# this persists the dependencies between builds
+ENV GRADLE_USER_HOME /home/$USERNAME/app/android/gradle_deps
 
-# install oracle java from PPA
-# RUN add-apt-repository ppa:webupd8team/java -y
-RUN echo oracle-java8-installer shared/accepted-oracle-license-v1-1 select true | /usr/bin/debconf-set-selections
-#echo oracle-java7-installer shared/accepted-oracle-license-v1-1 select true | sudo /usr/bin/debconf-set-selections
-# RUN apt-get update && apt-get -y install oracle-java7-installer && apt-get clean
+USER $USERNAME
 
-RUN echo "deb http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | tee /etc/apt/sources.list.d/webupd8team-java.list
-RUN echo "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | tee -a /etc/apt/sources.list.d/webupd8team-java.list
-RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys EEA14886
-RUN apt-get update &&  \
-    apt-get install -y oracle-java8-installer
-    
-
-#ANDROID STUFF
-RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --force-yes expect ant wget libc6-i386 lib32stdc++6 lib32gcc1 lib32ncurses5 lib32z1 && apt-get clean
-
-# Install Android SDK
-RUN cd /opt && wget --output-document=android-sdk.tgz --quiet https://dl.google.com/android/android-sdk_r24.0.2-linux.tgz && tar xzf android-sdk.tgz && rm -f android-sdk.tgz
-
-# Setup environment
-ENV ANDROID_HOME /opt/android-sdk-linux
-ENV PATH ${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/platform-tools
-
-# Install sdk elements
-ENV PATH ${PATH}:/opt/tools
-
-RUN echo ANDROID_HOME="${ANDROID_HOME}" >> /etc/environment
-
-RUN ["/opt/tools/android-accept-licenses.sh", "android update sdk --all --no-ui --filter platform-tools,build-tools-22.0.1,android-23,addon-google_apis_x86-google-19,extra-android-support,extra-android-m2repository,extra-google-m2repository"]
-
-RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-
-COPY tools/.bashrc /root/.bashrc
-WORKDIR /data
+# Set workdir
+# You'll need to run this image with a volume mapped to /home/dev (i.e. -v $(pwd):/home/dev) or override this value
+WORKDIR /home/$USERNAME/app
